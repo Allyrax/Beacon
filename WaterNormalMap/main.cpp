@@ -1,6 +1,6 @@
 #include "GL/GLEW.h"
 #define GLFW_DLL
-#include "GLFW/glfw3.h"
+#include "glfw-3.1.2\include\GLFW\glfw3.h"
 
 #include <stdio.h>
 #include <string>
@@ -60,7 +60,7 @@ void checkForHover(double, double);
 
 std::vector<DreamClickable*> buttonList;
 
-glm::vec2 texOffset(1.5, 0.0);
+glm::vec2 windDirection(1.5, 0.0);
 
 GLFWwindow* openGLInit(GLint, GLint, GLchar*);
 void keyCallback (GLFWwindow*, int, int, int, int);
@@ -76,6 +76,11 @@ GLuint createRTextureClamped(GLchar *);
 GLuint createRGBTexture(GLchar *);
 GLuint createRGBTextureMipMapped(GLchar *);
 void renderSplashScreen(GLuint, GLuint, GLFWwindow*);
+void markMarble(GLint*, GLfloat*);
+void readMarblePositions(GLint*, GLfloat*);
+
+void save(glm::vec2);
+glm::vec2 load();
 
 void printFunction();
 
@@ -84,6 +89,10 @@ DreamClickable* buttonPressed;
 bool mousePressed = false;
 DreamContainer* guiContainer;
 bool drawButtons = true;
+
+glm::vec2 cameraPosition(0.0, 0.0);
+GLint marbleCount = 0;
+GLfloat* marblePositions = new GLfloat[1000];
 
 int main(void) {
 
@@ -125,6 +134,7 @@ int main(void) {
 	GLuint buttonProgram = createProgram("button.vert", NULL, NULL, NULL, "button.frag");
 	GLuint shadowProgram = createProgram("shadowDepth.vert", NULL, NULL, NULL, "shadowDepth.frag");
 	GLuint reflectionProgram = createProgram("reflection.vert", NULL, NULL, NULL, "reflection.frag");
+	GLuint uiProgram = createProgram("uiTexture.vert", NULL, NULL, NULL, "uiTexture.frag");
 
 	glPatchParameteri(GL_PATCH_VERTICES, 4);
 	glPointSize(16);
@@ -267,6 +277,7 @@ int main(void) {
 	GLuint waterFoam = createRTexture("Textures/foamDark.pbm");
 	GLuint marbleTexture = createRGBTexture("Textures/marble.pbm");
 	GLuint waveTexture = createRGBTextureMipMapped("Textures/waveTexture.pbm");
+	GLuint circleTexture = createRGBTexture("Textures/UI/circle40.pbm");
 
 	GLuint waterCaustic[30];
 	for(int i=0; i<30; i++) {
@@ -286,7 +297,9 @@ int main(void) {
 	Model plyCube("Models/cube.ply", PLYMALLOC);
 	Model plyWave("Models/wave.ply", PLYMALLOC);
 	Model plyWorld("Models/WorldColor.ply", PLYMALLOC);
-	Model plyMarble("Models/marble2.ply", PLYUVMALLOC);
+	
+	readMarblePositions(&marbleCount, marblePositions);
+	Model plyMarble("Models/marble2.ply", marbleCount, marblePositions);
 	
 	//Model cube("Models/cube.dae", COLLADAE);
 	//Model land("Models/Land.dae", COLLADAE);
@@ -296,6 +309,8 @@ int main(void) {
 
 	camera.rotation = glm::vec2();
 	camera.translation = glm::vec3();
+
+	glm::vec2 startPosition = load();
 	
 	glm::vec4 lightPos(520.0, 120.0, 580.0, 1.0);
 	glm::vec3 lightColor(1.0, 1.0, 1.0);
@@ -305,11 +320,13 @@ int main(void) {
 	glm::vec3 center(0.0, 2.5, 0.0);
 	glm::vec3 up(0.0, -1.0, 0.0);
 	glm::mat4 viewMatrix = glm::lookAt(eye, center, up);
+	viewMatrix = glm::translate(viewMatrix, glm::vec3(-startPosition.x/2, 0.0f, startPosition.y/2));
 
 	glm::vec3 eyeReflection(0.0, -2.5, 1.0);
 	glm::vec3 centerReflection(0.0, -2.5, 0.0);
 	glm::vec3 upReflection(0.0, 1.0, 0.0);
 	glm::mat4 reflectionViewMatrix = glm::scale(glm::lookAt(eyeReflection, centerReflection, upReflection), glm::vec3(-1.0, 1.0, 1.0));
+	viewMatrix = glm::translate(viewMatrix, glm::vec3(-startPosition.x/2, 0.0f, startPosition.y/2));
 	
 	glm::mat4 perspectiveMatrix = glm::perspective(30.0f, 16.0f/9.0f, 0.1f, 3000.0f);
 
@@ -390,22 +407,45 @@ int main(void) {
 
 	glm::vec4 clearColorValue = glm::vec4(skyColor.r, skyColor.g, skyColor.b, 1.0);
 	float* clearDepthValue = new float(1.0f);
+	float* clearShadowValue = new float(0.0f);
 	int animationFrame = 0;
-	float lastFrameTime, time;
-	lastFrameTime = time = startTime;
+	int windAngle = 0;
+	int newWindAngle;
+	float windRadians;
+	float windStrength = dmapDepth;
+	float newWindStrength;
+	float lastFrameTime, lastWindTime, time;
+	float timeUntilWindChange = 0;
+	lastWindTime = lastFrameTime = time = startTime;
 
 	GLfloat currentTime;
 	do {
 		currentTime = (GLfloat) glfwGetTime();
 	} while(currentTime - startTime < 0.5f);
 
+	int trackLengthLeft = 20000;
+
 	while(!glfwWindowShouldClose(window) && !terminated) {
 		clearColorValue = glm::vec4(skyColor.r, skyColor.g, skyColor.b, 1.0);
 		glfwPollEvents();
 
 		time = (float) glfwGetTime();
-		texOffset.x = -time/20.0f;
-		texOffset.y = time/40.0f;
+		if(time - lastWindTime > timeUntilWindChange) {
+			lastWindTime = time;
+			timeUntilWindChange = rand()%40 + 20;
+			newWindAngle = rand()%60 - 30;
+			newWindStrength = rand()%2000/100.0f - 10.0;
+		}
+
+		if(time - lastWindTime < 20) {
+			windRadians = (newWindAngle*(time - lastWindTime)/20 + windAngle)/(2.0*3.1415926);
+			//dmapDepth = newWindStrength*(time - lastWindTime)/20 + windStrength*(1 - (time - lastWindTime)/20);
+		} else {
+			windStrength = dmapDepth;
+		}
+
+		windDirection.x += glm::sin(windRadians)/1000;
+		windDirection.y += glm::cos(windRadians)/1000;
 
 		float sinValue = (sin(time)/4.0f + 1.25f);
 
@@ -414,6 +454,8 @@ int main(void) {
 		viewMatrix = glm::rotate(viewMatrix, camera.rotation.x, glm::vec3(0.0, 1.0, 0.0));
 		viewMatrix = glm::translate(viewMatrix, camera.translation);
 		reflectionViewMatrix = glm::rotate(reflectionViewMatrix, camera.rotation.x, glm::vec3(0.0, 1.0, 0.0));
+
+		cameraPosition = glm::vec2(viewMatrix[3][0], viewMatrix[3][2]);
 
 		glm::vec3 cameraReflection (camera.translation.x, -camera.translation.y, camera.translation.z);
 		reflectionViewMatrix = glm::translate(reflectionViewMatrix, cameraReflection);
@@ -471,9 +513,10 @@ int main(void) {
 		///////////////////////////
 		//Draw to the Shadow Buffer
 		///////////////////////////
+
 		glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
 		glViewport(0, 0, DEPTH_MAP_WIDTH, DEPTH_MAP_HEIGHT);
-		glClearBufferfv(GL_DEPTH, 0, clearDepthValue);
+		glClearBufferfv(GL_DEPTH, 0, clearShadowValue);
 		glUseProgram(shadowProgram);
 
 		glm::vec3 lightInvDir = glm::vec3(lightPos[0], lightPos[1], lightPos[2]);
@@ -488,7 +531,7 @@ int main(void) {
 								  0.0, 0.0, 0.5, 0.0,
 								  0.5, 0.5, 0.5, 1.0);
 		glm::mat4 depthBiasMVP = depthBiasMatrix*depthVP;
-		
+		/*
 		//Land
 		land.setVP(depthVP);
 		//land.render();
@@ -514,7 +557,7 @@ int main(void) {
 		plyWorld.renderPLY();
 		
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
+		*/
 		////////////////////////
 		//End of Shadow Buffer
 		////////////////////////
@@ -611,7 +654,7 @@ int main(void) {
 		
 		glUniformMatrix4fv(9, 1, GL_FALSE, &viewMatrix[0][0]);
 		glUniform1f(10, bias);
-		glUniform2fv(11, 1, &texOffset[0]);
+		glUniform2fv(11, 1, &windDirection[0]);
 		glUniform3fv(12, 1, &lightPos[0]);
 		
 		glActiveTexture(GL_TEXTURE0);
@@ -675,7 +718,7 @@ int main(void) {
 		glUniform1f(uniforms.dmapDepth, dmapDepth);
 		glUniform1f(uniforms.sinValue, sinValue);
 		glUniformMatrix4fv(uniforms.mvp, 1, GL_FALSE, &mvpWater[0][0]);
-		glUniform2fv(uniforms.texOffset, 1, &texOffset[0]);
+		glUniform2fv(uniforms.texOffset, 1, &windDirection[0]);
 		
 		glUniform1f(uniforms.lightPower, lightPower);
 		glUniform3fv(uniforms.lightPos, 1, &mvpLightPos[0]);
@@ -712,7 +755,7 @@ int main(void) {
 		
 		glUniformMatrix4fv(9, 1, GL_FALSE, &viewMatrix[0][0]);
 		glUniform1f(10, bias);
-		glUniform2fv(11, 1, &texOffset[0]);
+		glUniform2fv(11, 1, &windDirection[0]);
 		glUniform3fv(12, 1, &lightPos[0]);
 		glUniform1fv(13, 1, &sphereControls[0]);
 		glUniform1fv(14, 1, &sphereControls[1]);
@@ -765,7 +808,11 @@ int main(void) {
 		depthBiasMVP = depthBiasMatrix*depthProjectionMatrix*depthViewMatrix*plyMarble.getMatrix();
 		glUniformMatrix4fv(3, 1, GL_FALSE, &depthBiasMVP[0][0]);
 		glUniformMatrix4fv(8, 1, GL_FALSE, &plyMarble.getMatrix()[0][0]);
-		plyMarble.renderPLY();
+		
+		glBindBuffer(GL_ARRAY_BUFFER, plyMarble.getInstanceBuffer());
+		glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(GLfloat)*2*marbleCount, marblePositions);
+
+		plyMarble.renderPLYInstanced(marbleCount);
 
 		glDisable(GL_CULL_FACE);
 
@@ -775,6 +822,7 @@ int main(void) {
 		glUniformMatrix4fv(0, 1, GL_FALSE, &mvpLight[0][0]);
 		glUniform4fv(1, 1, &mvpLightPosCorrect[0]);
 		glDrawArrays(GL_POINTS, 0, 1);
+
 
 		//Draw Framebuffer Texture To Screen
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -809,6 +857,34 @@ int main(void) {
 					glDrawArrays(GL_QUADS, 0, 4);
 				}
 			}
+		}
+		
+
+		//UI
+		glUseProgram(uiProgram);
+		
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, circleTexture);
+
+		glUniform2iv(0, 1, &glm::ivec2(windowWidth, windowHeight)[0]);
+		glUniform2fv(1, 1, &glm::vec2(20, 20)[0]);
+
+		
+		int trackTime = 20000;
+
+		trackLengthLeft -= 50;
+		if(trackLengthLeft < 0)
+			trackLengthLeft = trackTime;
+		
+		int layerCount = 16;
+		for(int layerIndex = 0; layerIndex < layerCount; layerIndex++) {
+			if(layerIndex == layerCount - 1) {
+				float size = trackLengthLeft*20.0/trackTime;
+				glUniform2fv(1, 1, &glm::vec2(size, size)[0]);
+			}
+
+			glUniform2iv(2, 1, &glm::ivec2(1260, 20 + layerIndex*30)[0]);
+			glDrawArrays(GL_QUADS, 0, 4);
 		}
 
 		glfwSwapBuffers(window);
@@ -992,14 +1068,24 @@ void keyCallback (GLFWwindow * window, int key, int scancode, int action, int mo
 		else if (key == GLFW_KEY_Z)
 			camera.translation.y += MOVESPEED;
 
-		else if (key == GLFW_KEY_V)
-			texOffset.x += 0.1f;
+		else if (key == GLFW_KEY_SPACE) {
+			if(marbleCount == 0) {
 
-		else if (key == GLFW_KEY_C)
-			texOffset.x -= 0.1f;
+			}
+
+			if(marbleCount < 500) {
+				marbleCount++;
+				marblePositions[(marbleCount - 1)*2] = cameraPosition.x;
+				marblePositions[(marbleCount - 1)*2 + 1] = cameraPosition.y;
+				markMarble(&marbleCount, marblePositions);
+			}
+		}
 
 		else if (key == GLFW_KEY_B)
 			drawButtons = !drawButtons;
+
+		else if (key == GLFW_KEY_P)
+			save(cameraPosition);
 		
 		if (key ==  GLFW_KEY_ESCAPE)
 		{
@@ -1034,15 +1120,6 @@ void keyCallback (GLFWwindow * window, int key, int scancode, int action, int mo
 		
 		else if (key == GLFW_KEY_Z)
 			camera.translation.y = 0.0f;
-
-		else if (key == GLFW_KEY_V)
-			texOffset.x += 0.1f;
-
-		else if (key == GLFW_KEY_C)
-			texOffset.x -= 0.1f;
-
-		else if (key == GLFW_KEY_B)
-			drawButtons = !drawButtons;
 		
 		if (key ==  GLFW_KEY_ESCAPE)
 		{
@@ -1231,4 +1308,47 @@ void renderSplashScreen(GLuint program, GLuint texture, GLFWwindow* window) {
 	glDrawArrays(GL_QUADS, 0, 4);
 	
 	glfwSwapBuffers(window);
+}
+
+void markMarble(GLint* marbleCount, GLfloat* marblePositions) {
+	std::fstream marbleFile;
+	marbleFile.open("marblePositions.dat", std::ios::binary | std::ios::out);
+
+	marbleFile.write((char*)marbleCount, sizeof(GLint));
+	marbleFile.write((char*)marblePositions, sizeof(GLfloat)*2*(*marbleCount));
+
+	marbleFile.close();
+}
+
+void readMarblePositions(GLint* marbleCount, GLfloat* marblePositions) {
+	std::fstream marbleFile;
+
+	marbleFile.open("marblePositions.dat", std::ios::binary | std::ios::in);
+
+	marbleFile.read((char*) marbleCount, sizeof(int));
+	marbleFile.read((char*) marblePositions, sizeof(GLfloat)*2*(*marbleCount));
+
+	marbleFile.close();
+}
+
+void save(glm::vec2 position) {
+	std::fstream saveFile;
+
+	saveFile.open("saveFile.save", std::ios::binary | std::ios::out);
+
+	saveFile.write((char*) &position, sizeof(glm::vec2));
+	
+	saveFile.close();
+}
+
+glm::vec2 load() {
+	glm::vec2* startPosition = new glm::vec2();
+	std::fstream saveFile;
+
+	saveFile.open("saveFile.save", std::ios::binary | std::ios::in);
+
+	saveFile.read((char*) startPosition, sizeof(glm::vec2));
+	saveFile.close();
+
+	return *startPosition;
 }

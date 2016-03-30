@@ -131,6 +131,12 @@
     <None Include="plyUV.frag">
       <Filter>Resource Files</Filter>
     </None>
+    <None Include="uiTexture.vert">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="uiTexture.frag">
+      <Filter>Resource Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Text Include="simplePass.vert">
